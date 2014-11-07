@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 )
 
 type Fetcher interface {
@@ -9,6 +11,13 @@ type Fetcher interface {
 	// a slice of URLs found on that page.
 	Fetch(url string) (body string, urls []string, err error)
 }
+
+var fetched = struct {
+	m map[string]error
+	sync.Mutex
+}{m: make(map[string]error)}
+
+var loading = errors.New("loading")
 
 // Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
@@ -19,16 +28,38 @@ func Crawl(url string, depth int, fetcher Fetcher) {
 	if depth <= 0 {
 		return
 	}
+
+	fetched.Lock()
+	if _, ok := fetched.m[url]; ok {
+		fetched.Unlock()
+		return
+	}
+
+	fetched.m[url] = loading
+	fetched.Unlock()
+
 	body, urls, err := fetcher.Fetch(url)
+	fetched.Lock()
+	fetched.m[url] = err
+	fetched.Unlock()
+
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	fmt.Printf("found: %s %q\n", url, body)
+	done := make(chan bool)
 	for _, u := range urls {
-		Crawl(u, depth-1, fetcher)
+		go func(url string) {
+			Crawl(url, depth-1, fetcher)
+			done <- true
+		}(u)
 	}
-	return
+
+	for i, u := range urls {
+		fmt.Println(i, u)
+		<-done
+	}
 }
 
 func main() {
